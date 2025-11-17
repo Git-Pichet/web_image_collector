@@ -19,7 +19,7 @@ class ImageScraperApp(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Web Image Collector (Python)")
+        self.title("Web Image Collector - Local Edit Test")
         self.geometry("1000x700")
 
         # data structure: list of dict {url, data, photo, selected_var, filename}
