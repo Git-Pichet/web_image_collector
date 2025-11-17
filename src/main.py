@@ -13,14 +13,16 @@ from PIL import Image, ImageTk
 
 CONFIG_FILE = "config.json"
 CONFIG_KEY_SAVE_PATH = "default_save_path"
+CONFIG_KEY_GOOGLE_API_KEY = "google_api_key"
+CONFIG_KEY_GOOGLE_CX = "google_cx"
 
 
 class ImageScraperApp(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Web Image Collector - Local Edit Test")
-        self.geometry("1000x700")
+        self.title("Web Image Collector (Python)")
+        self.geometry("1000x750")
 
         # data structure: list of dict {url, data, photo, selected_var, filename}
         self.images = []
@@ -53,11 +55,25 @@ class ImageScraperApp(tk.Tk):
     # UI
     # -----------------------------------
     def _build_ui(self):
-        # -------- URL Input --------
+        # -------- Mode selection --------
+        mode_frame = tk.Frame(self)
+        mode_frame.pack(fill="x", padx=10, pady=(10, 0))
+
+        tk.Label(mode_frame, text="Mode:").pack(side="left")
+
+        self.mode_var = tk.StringVar(value="url")  # "url" or "google"
+        tk.Radiobutton(
+            mode_frame, text="From Page URL", variable=self.mode_var, value="url"
+        ).pack(side="left", padx=5)
+        tk.Radiobutton(
+            mode_frame, text="Google Image Search", variable=self.mode_var, value="google"
+        ).pack(side="left", padx=5)
+
+        # -------- URL / Query Input --------
         url_frame = tk.Frame(self)
         url_frame.pack(fill="x", padx=10, pady=5)
 
-        tk.Label(url_frame, text="Page URL (copy from Chrome):").pack(side="left")
+        tk.Label(url_frame, text="Page URL / Search Keyword:").pack(side="left")
         self.url_var = tk.StringVar()
         url_entry = tk.Entry(url_frame, textvariable=self.url_var)
         url_entry.pack(side="left", fill="x", expand=True, padx=5)
@@ -79,6 +95,26 @@ class ImageScraperApp(tk.Tk):
 
         save_browse_btn = tk.Button(save_frame, text="Browse...", command=self.browse_save_path)
         save_browse_btn.pack(side="left", padx=5)
+
+        # -------- Google API Settings --------
+        google_frame = tk.LabelFrame(self, text="Google Image Search Settings (Custom Search API)")
+        google_frame.pack(fill="x", padx=10, pady=5)
+
+        self.api_key_var = tk.StringVar(value=self.config_data.get(CONFIG_KEY_GOOGLE_API_KEY, ""))
+        self.cx_var = tk.StringVar(value=self.config_data.get(CONFIG_KEY_GOOGLE_CX, ""))
+
+        tk.Label(google_frame, text="API Key:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        api_entry = tk.Entry(google_frame, textvariable=self.api_key_var, show="*")
+        api_entry.grid(row=0, column=1, sticky="we", padx=5, pady=2)
+
+        tk.Label(google_frame, text="Search Engine ID (cx):").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        cx_entry = tk.Entry(google_frame, textvariable=self.cx_var)
+        cx_entry.grid(row=1, column=1, sticky="we", padx=5, pady=2)
+
+        save_google_btn = tk.Button(google_frame, text="Save Settings", command=self.save_google_config)
+        save_google_btn.grid(row=0, column=2, rowspan=2, padx=5, pady=2, sticky="ns")
+
+        google_frame.columnconfigure(1, weight=1)
 
         # -------- Action Buttons --------
         action_frame = tk.Frame(self)
@@ -133,12 +169,29 @@ class ImageScraperApp(tk.Tk):
             self._save_config()
 
     # -----------------------------------
-    # Core logic
+    # Google settings
+    # -----------------------------------
+    def save_google_config(self):
+        self.config_data[CONFIG_KEY_GOOGLE_API_KEY] = self.api_key_var.get().strip()
+        self.config_data[CONFIG_KEY_GOOGLE_CX] = self.cx_var.get().strip()
+        self._save_config()
+        messagebox.showinfo("Info", "Google API settings saved.")
+
+    # -----------------------------------
+    # Core logic (entry point)
     # -----------------------------------
     def scan_images(self):
+        mode = self.mode_var.get()
+        if mode == "url":
+            self.scan_images_from_url()
+        else:
+            self.scan_images_from_google()
+
+    # -------- Mode 1: Scan from URL --------
+    def scan_images_from_url(self):
         url = self.url_var.get().strip()
         if not url:
-            messagebox.showwarning("Warning", "Please input URL (copy from Chrome address bar).")
+            messagebox.showwarning("Warning", "Please input Page URL (copy from Chrome address bar).")
             return
 
         # Basic normalize
@@ -169,7 +222,6 @@ class ImageScraperApp(tk.Tk):
             if not src:
                 continue
             img_url = urljoin(url, src)
-            # Download image into RAM + create thumbnail
             if self._download_and_add_image(img_url):
                 found_count += 1
 
@@ -178,6 +230,62 @@ class ImageScraperApp(tk.Tk):
         else:
             messagebox.showinfo("Info", f"Found and loaded {found_count} images into RAM (cache).")
 
+    # -------- Mode 2: Google Image Search --------
+    def scan_images_from_google(self):
+        query = self.url_var.get().strip()
+        if not query:
+            messagebox.showwarning("Warning", "Please input search keyword for Google Images.")
+            return
+
+        api_key = self.api_key_var.get().strip()
+        cx = self.cx_var.get().strip()
+
+        if not api_key or not cx:
+            messagebox.showwarning(
+                "Warning",
+                "Google API Key and Search Engine ID (cx) are required.\n"
+                "Please fill them in and click 'Save Settings' first."
+            )
+            return
+
+        # Clear old images (cache in RAM) + UI
+        self.clear_images(silent=True)
+
+        params = {
+            "key": api_key,
+            "cx": cx,
+            "q": query,
+            "searchType": "image",
+            "num": 10,        # จำนวนรูปต่อครั้ง ปรับได้
+            "safe": "off",    # หรือใช้ 'high' ถ้าต้องการ filter
+        }
+
+        try:
+            resp = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to search Google Images:\n{e}")
+            return
+
+        items = data.get("items") or []
+        if not items:
+            messagebox.showinfo("Info", "No images found from Google for this query.")
+            return
+
+        found_count = 0
+        for item in items:
+            link = item.get("link")
+            if not link:
+                continue
+            if self._download_and_add_image(link):
+                found_count += 1
+
+        messagebox.showinfo("Info", f"Found and loaded {found_count} images from Google into RAM (cache).")
+
+    # -----------------------------------
+    # Download & add image to UI/RAM
+    # -----------------------------------
     def _download_and_add_image(self, image_url: str) -> bool:
         try:
             resp = requests.get(image_url, timeout=15)
